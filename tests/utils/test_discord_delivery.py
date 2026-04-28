@@ -9,10 +9,51 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.utils.discord_delivery import (
+    _DiscordTokenFilter,
     create_discord_thread,
     post_discord_message,
     send_discord_report,
 )
+
+
+# ---------------------------------------------------------------------------
+# fix 1 – httpx log token filter
+# ---------------------------------------------------------------------------
+
+
+def test_discord_token_filter_scrubs_msg() -> None:
+    f = _DiscordTokenFilter()
+    token = "DISCORD_TOKEN_PART_1_XXX.ABCDEF.DISCORD_TOKEN_PART_3_XXXXXXXX"
+    record = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg=f"HTTP Request: POST https://discord.com/api/v10/... Authorization: Bot {token}",
+        args=(),
+        exc_info=None,
+    )
+    f.filter(record)
+    assert token not in record.msg
+    assert "<redacted>" in record.msg
+
+
+def test_discord_token_filter_scrubs_args() -> None:
+    f = _DiscordTokenFilter()
+    token = "DISCORD_TOKEN_PART_1_XXX.ABCDEF.DISCORD_TOKEN_PART_3_XXXXXXXX"
+    record = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="Authorization: %s",
+        args=(f"Bot {token}",),
+        exc_info=None,
+    )
+    f.filter(record)
+    assert isinstance(record.args, tuple)
+    assert token not in record.args[0]
+    assert "<redacted>" in record.args[0]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -130,7 +171,7 @@ def test_post_discord_message_exception_redacts_token(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    secret = "bot-token-secret"
+    secret = "DISCORD_TOKEN_PART_1_XXX.ABCDEF.DISCORD_TOKEN_PART_3_XXXXXXXX"
 
     def _raise(*_a: Any, **_kw: Any) -> None:
         raise ConnectionError(f"failed with token {secret}")

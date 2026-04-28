@@ -8,7 +8,45 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.utils.slack_delivery import _call_reactions_api, _post_direct, send_slack_report
+from app.utils.slack_delivery import _SlackTokenFilter, _call_reactions_api, _post_direct, send_slack_report
+
+
+# ---------------------------------------------------------------------------
+# fix 1 – httpx log token filter
+# ---------------------------------------------------------------------------
+
+
+def test_slack_token_filter_scrubs_msg() -> None:
+    f = _SlackTokenFilter()
+    record = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='HTTP Request: POST https://slack.com/api/chat.postMessage "Bearer xoxb-fake-test-token"',
+        args=(),
+        exc_info=None,
+    )
+    f.filter(record)
+    assert "xoxb-fake-test-token" not in record.msg
+    assert "<redacted>" in record.msg
+
+
+def test_slack_token_filter_scrubs_args() -> None:
+    f = _SlackTokenFilter()
+    record = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="Authorization: %s",
+        args=("Bearer xoxb-fake-test-token",),
+        exc_info=None,
+    )
+    f.filter(record)
+    assert isinstance(record.args, tuple)
+    assert "xoxb-fake-test-token" not in record.args[0]
+    assert "<redacted>" in record.args[0]
 
 
 def _mock_response(status_code: int, body: dict[str, Any]) -> MagicMock:
@@ -74,7 +112,7 @@ def test_post_direct_exception_redacts_token_in_return_and_logs(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    secret = "xoxb-123-secret"
+    secret = "xoxb-fake-test-token"
 
     def _raise(*_a: Any, **_kw: Any) -> None:
         raise ConnectionError(f"request failed for {secret}")

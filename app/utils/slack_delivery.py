@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 import httpx
@@ -12,6 +13,37 @@ from app.config import SLACK_CHANNEL
 from app.output import debug_print
 
 logger = logging.getLogger(__name__)
+
+_SLACK_TOKEN_RE = re.compile(r"(xox[bapr]-[0-9a-zA-Z-]+)")
+
+
+def _redact_arg(a: object) -> object:
+    """Redact Slack token from a log arg, preserving the original type if no match."""
+    s = str(a)
+    redacted = _SLACK_TOKEN_RE.sub("<redacted>", s)
+    return redacted if redacted != s else a
+
+
+class _SlackTokenFilter(logging.Filter):
+    """Scrub Slack tokens from httpx/httpcore log records."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = _SLACK_TOKEN_RE.sub("<redacted>", str(record.msg))
+        if record.args:
+            if isinstance(record.args, tuple):
+                record.args = tuple(_redact_arg(a) for a in record.args)
+            elif isinstance(record.args, dict):
+                record.args = {k: _redact_arg(v) for k, v in record.args.items()}
+        return True
+
+
+def _install_httpx_token_filter() -> None:
+    _filter = _SlackTokenFilter()
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).addFilter(_filter)
+
+
+_install_httpx_token_filter()
 
 
 def _redact_token(text: str, token: str) -> str:
