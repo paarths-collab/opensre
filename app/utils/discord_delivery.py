@@ -10,6 +10,28 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+def _redact_token(text: str, token: str) -> str:
+    if token and token in text:
+        return text.replace(token, "<redacted>")
+    return text
+
+
+def _response_error_message(resp: Any) -> str:
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        return str(getattr(resp, "text", "")) or f"HTTP {getattr(resp, 'status_code', 'unknown')}"
+
+    if isinstance(data, dict):
+        for key in ("message", "error", "detail", "description"):
+            value = data.get(key)
+            if value:
+                return str(value)
+        return "unknown"
+
+    return str(data) if data else f"HTTP {getattr(resp, 'status_code', 'unknown')}"
+
+
 def post_discord_message(
     channel_id: str,
     embeds: list[dict[str, Any]],
@@ -31,19 +53,30 @@ def post_discord_message(
             },
             timeout=15.0,
         )
-        data = resp.json()
-        error_message = ""
+        try:
+            data = resp.json()
+        except Exception:  # noqa: BLE001
+            error_message = _redact_token(_response_error_message(resp), bot_token)
+            logger.warning("[discord] post message failed: %s", resp.status_code)
+            logger.warning("[discord] post message failed: %s", error_message)
+            return False, error_message, ""
+        if not isinstance(data, dict):
+            error_message = _redact_token(_response_error_message(resp), bot_token)
+            logger.warning("[discord] post message failed: %s", resp.status_code)
+            logger.warning("[discord] post message failed: %s", error_message)
+            return False, error_message, ""
         if resp.status_code not in (200, 201):
             logger.warning("[discord] post message failed: %s", resp.status_code)
-            logger.warning("[discord] api response %s", data)
-            error_message = data.get("message", data.get("error", "unknown"))
+            logger.warning("[discord] api response %s", _redact_token(str(data), bot_token))
+            error_message = _redact_token(str(data.get("message", data.get("error", "unknown"))), bot_token)
             logger.warning("[discord] post message failed: %s", error_message)
             return False, error_message, ""
         message_id: str = str(data.get("id") or "")
-        return True, error_message, message_id
+        return True, "", message_id
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[discord] post message exception: %s", exc)
-        return False, str(exc), ""
+        error = _redact_token(str(exc), bot_token)
+        logger.warning("[discord] post message exception: %s", error)
+        return False, error, ""
 
 
 def create_discord_thread(
@@ -68,17 +101,26 @@ def create_discord_thread(
             },
             timeout=15.0,
         )
-        data = resp.json()
-        error_message = ""
+        try:
+            data = resp.json()
+        except Exception:  # noqa: BLE001
+            error_message = _redact_token(_response_error_message(resp), bot_token)
+            logger.warning("[discord] create thread failed: %s", error_message)
+            return False, error_message, ""
+        if not isinstance(data, dict):
+            error_message = _redact_token(_response_error_message(resp), bot_token)
+            logger.warning("[discord] create thread failed: %s", error_message)
+            return False, error_message, ""
         if resp.status_code not in (200, 201):
-            error_message = data.get("message", data.get("error", "unknown"))
+            error_message = _redact_token(str(data.get("message", data.get("error", "unknown"))), bot_token)
             logger.warning("[discord] create thread failed: %s", error_message)
             return False, error_message, ""
         thread_id: str = str(data.get("id") or "")
-        return True, error_message, thread_id
+        return True, "", thread_id
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[discord] create thread exception: %s", exc)
-        return False, str(exc), ""
+        error = _redact_token(str(exc), bot_token)
+        logger.warning("[discord] create thread exception: %s", error)
+        return False, error, ""
 
 
 _EMBED_TITLE_LIMIT = 256

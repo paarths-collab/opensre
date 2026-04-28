@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -22,6 +23,14 @@ def _mock_response(status_code: int, body: dict[str, Any]) -> MagicMock:
     resp = MagicMock()
     resp.status_code = status_code
     resp.json.return_value = body
+    return resp
+
+
+def _mock_non_json_response(status_code: int, text: str) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.side_effect = ValueError("not JSON")
+    resp.text = text
     return resp
 
 
@@ -106,6 +115,38 @@ def test_post_discord_message_exception_returns_false(monkeypatch: pytest.Monkey
     assert message_id == ""
 
 
+def test_post_discord_message_non_json_error_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.utils.discord_delivery.httpx.post",
+        lambda *_a, **_kw: _mock_non_json_response(502, "<html><body>Bad Gateway</body></html>"),
+    )
+    ok, error, message_id = post_discord_message("chan-1", [], "bot-token")
+    assert ok is False
+    assert "Bad Gateway" in error
+    assert message_id == ""
+
+
+def test_post_discord_message_exception_redacts_token(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "bot-token-secret"
+
+    def _raise(*_a: Any, **_kw: Any) -> None:
+        raise ConnectionError(f"failed with token {secret}")
+
+    monkeypatch.setattr("app.utils.discord_delivery.httpx.post", _raise)
+    caplog.set_level(logging.WARNING, logger="app.utils.discord_delivery")
+
+    ok, error, _ = post_discord_message("chan-1", [], secret)
+
+    assert ok is False
+    assert secret not in error
+    assert "<redacted>" in error
+    assert secret not in caplog.text
+    assert "<redacted>" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # create_discord_thread
 # ---------------------------------------------------------------------------
@@ -155,6 +196,17 @@ def test_create_discord_thread_exception(monkeypatch: pytest.MonkeyPatch) -> Non
     ok, error, thread_id = create_discord_thread("chan-1", "msg-1", "name", "bot-token")
     assert ok is False
     assert "timed out" in error
+    assert thread_id == ""
+
+
+def test_create_discord_thread_non_json_plain_text_error_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.utils.discord_delivery.httpx.post",
+        lambda *_a, **_kw: _mock_non_json_response(500, "plain text error"),
+    )
+    ok, error, thread_id = create_discord_thread("chan-1", "msg-1", "name", "bot-token")
+    assert ok is False
+    assert "plain text error" in error
     assert thread_id == ""
 
 

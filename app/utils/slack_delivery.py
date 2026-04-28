@@ -14,6 +14,28 @@ from app.output import debug_print
 logger = logging.getLogger(__name__)
 
 
+def _redact_token(text: str, token: str) -> str:
+    if token and token in text:
+        return text.replace(token, "<redacted>")
+    return text
+
+
+def _response_error_message(resp: Any) -> str:
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        return str(getattr(resp, "text", "")) or f"HTTP {getattr(resp, 'status_code', 'unknown')}"
+
+    if isinstance(data, dict):
+        for key in ("error", "message", "detail", "description"):
+            value = data.get(key)
+            if value:
+                return str(value)
+        return "unknown"
+
+    return str(data) if data else f"HTTP {getattr(resp, 'status_code', 'unknown')}"
+
+
 def _call_reactions_api(method: str, token: str, channel: str, timestamp: str, emoji: str) -> bool:
     """Call Slack reactions.add or reactions.remove.
 
@@ -29,14 +51,23 @@ def _call_reactions_api(method: str, token: str, channel: str, timestamp: str, e
             },
             timeout=8.0,
         )
-        data = resp.json()
+        try:
+            data = resp.json()
+        except Exception:  # noqa: BLE001
+            error = _redact_token(_response_error_message(resp), token)
+            logger.warning("[slack] %s(%s) failed: %s", method, emoji, error)
+            return False
+        if not isinstance(data, dict):
+            error = _redact_token(_response_error_message(resp), token)
+            logger.warning("[slack] %s(%s) failed: %s", method, emoji, error)
+            return False
         if not data.get("ok"):
-            error = data.get("error", "unknown")
+            error = _redact_token(str(data.get("error", "unknown")), token)
             if error not in ("already_reacted", "no_reaction", "message_not_found"):
                 logger.warning("[slack] %s(%s) failed: %s", method, emoji, error)
         return bool(data.get("ok", False))
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[slack] %s(%s) exception: %s", method, emoji, exc)
+        logger.warning("[slack] %s(%s) exception: %s", method, emoji, _redact_token(str(exc), token))
         return False
 
 
@@ -220,9 +251,28 @@ def _post_direct(
             },
             timeout=15.0,
         )
-        data = resp.json()
+        try:
+            data = resp.json()
+        except Exception:  # noqa: BLE001
+            error = _redact_token(_response_error_message(resp), token)
+            logger.error(
+                "[slack] Direct post FAILED: non-JSON response detail=%s (channel=%s, thread_ts=%s)",
+                error,
+                channel,
+                thread_ts,
+            )
+            return False, error
+        if not isinstance(data, dict):
+            error = _redact_token(_response_error_message(resp), token)
+            logger.error(
+                "[slack] Direct post FAILED: unexpected response detail=%s (channel=%s, thread_ts=%s)",
+                error,
+                channel,
+                thread_ts,
+            )
+            return False, error
         if not data.get("ok"):
-            error = data.get("error", "unknown")
+            error = _redact_token(str(data.get("error", "unknown")), token)
             response_meta = data.get("response_metadata", {})
             logger.error(
                 "[slack] Direct post FAILED: error=%s, metadata=%s (channel=%s, thread_ts=%s)",
@@ -240,15 +290,16 @@ def _post_direct(
         )
         return True, ""
     except Exception as exc:  # noqa: BLE001
+        error = _redact_token(str(exc), token)
         logger.error(
             "[slack] Direct post exception type=%s channel=%s thread_ts=%s detail=%s "
             "(caller may attempt fallback)",
             type(exc).__name__,
             channel,
             thread_ts,
-            exc,
+            error,
         )
-        return False, f"exception={exc}"
+        return False, f"exception={error}"
 
 
 def _post_via_webapp(
