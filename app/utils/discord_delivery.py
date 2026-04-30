@@ -125,9 +125,9 @@ def send_discord_report(report: str, discord_ctx: dict[str, Any]) -> tuple[bool,
     thread_id: str = str(discord_ctx.get("thread_id") or "")
     bot_token: str = str(discord_ctx.get("bot_token") or "")
     embed = {
-        "title": _truncate("Investigation Complete", _EMBED_TITLE_LIMIT),
+        "title": __truncate("Investigation Complete", _EMBED_TITLE_LIMIT),
         "color": 15158332,
-        "description": _truncate(report, _EMBED_DESCRIPTION_LIMIT),
+        "description": __truncate(report, _EMBED_DESCRIPTION_LIMIT),
         "footer": {"text": "OpenSRE Investigation"},
     }
     target = thread_id if thread_id else channel_id
